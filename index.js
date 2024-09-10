@@ -1,4 +1,6 @@
-const { Client, GatewayIntentBits } = require('discord.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const { Client, Collection, Events, GatewayIntentBits } = require('discord.js');
 const { answerConversation } = require("./openai");
 require('dotenv').config();
 
@@ -10,6 +12,25 @@ const client = new Client({
         GatewayIntentBits.MessageContent
     ]
 });
+client.commands = new Collection();
+
+const foldersPath = path.join(__dirname, 'commands');
+const commandFolders = fs.readdirSync(foldersPath);
+
+for (const folder of commandFolders) {
+    const commandsPath = path.join(foldersPath, folder);
+    const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+    for (const file of commandFiles) {
+        const filePath = path.join(commandsPath, file);
+        const command = require(filePath);
+        // Set a new item in the Collection with the key as the command name and the value as the exported module
+        if ('data' in command && 'execute' in command) {
+            client.commands.set(command.data.name, command);
+        } else {
+            console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+        }
+    }
+}
 
 // Variations des messages
 const responses = {
@@ -85,85 +106,86 @@ function getRandomResponse(category) {
     return messages[Math.floor(Math.random() * messages.length)];
 }
 
-let groupConversation = null;
-let tokensUsed = 0;
-const MAX_TOKENS = 10000;
-let conversationTimeout;
+let groupConversations = {}; // Pour gérer plusieurs conversations par channel
+let tokensUsed = {};
+let inactiveTimeouts = {};
+let resetTimeouts = {};
+let MAX_TOKENS = 10000;
+let MAX_MESSAGES_NO_RESPONSE = 10; // Nombre de messages sans que le bot ne soit mentionné
+let RESPONSE_TIMEOUT = 30000; // 30 secondes d'inactivité avant que le bot réponde automatiquement
+let RESET_TIMEOUT = 300000; // 5 minutes d'inactivité avant de réinitialiser la conversation
 
-async function answer(message) {
-    // Déclenche "XX est en train d'écrire..."
+async function answer(message, channelId) {
     await message.channel.sendTyping();
 
-    // Vérifie si quelqu'un remercie ou clôture la conversation
-    if (message.content.toLowerCase().includes("merci") || message.content.toLowerCase().includes("c'est tout")) {
-        await message.reply(getRandomResponse('thanks'));
-        groupConversation = null; // Réinitialise la conversation de groupe
-        tokensUsed = 0;
-        return;
-    }
-
     // Ajoute le message de l'utilisateur dans la conversation
-    groupConversation.push({
+    groupConversations[channelId].push({
         role: 'user',
         content: `${message.author.username}: ${message.content}`
     });
 
-    // Si au moins 3 messages sont échangés, le bot peut générer une réponse
-    if (groupConversation.length >= 3) {
+    if (groupConversations[channelId].length >= 3) {
         try {
-            // Simule que le bot est en train d'écrire pendant que l'API génère la réponse
             await message.channel.sendTyping();
-
-            const response = await answerConversation(groupConversation);
-
+            const response = await answerConversation(groupConversations[channelId]);
             const botResponse = response.choices[0].message.content.trim();
 
-            // Enregistre la réponse du bot dans l'historique de la conversation
-            groupConversation.push({
+            groupConversations[channelId].push({
                 role: 'assistant',
                 content: botResponse
             });
 
-            // Incrémente le nombre de tokens utilisés
-            tokensUsed += response.usage.total_tokens;
+            tokensUsed[channelId] += response.usage.total_tokens;
 
-            // Si le nombre maximal de tokens est atteint, arrêter la conversation
-            if (tokensUsed >= MAX_TOKENS) {
+            if (tokensUsed[channelId] >= MAX_TOKENS) {
                 await message.channel.send(getRandomResponse('tooMuchTalking'));
-                groupConversation = null;
-                tokensUsed = 0;
+                resetConversation(channelId); // Réinitialise la conversation
             } else {
-                // Sinon, le bot répond au message
                 await message.channel.send(botResponse);
             }
-
         } catch (error) {
             console.error("Erreur lors de l'appel à l'API OpenAI :", error);
-            await message.reply("Désolé, une erreur s'est produite en essayant de répondre.");
-            groupConversation = null; // Réinitialise la conversation en cas d'erreur
+            await message.reply("Désolé, une erreur s'est produite.");
+            resetConversation(channelId); // Réinitialise la conversation en cas d'erreur
         }
     }
 }
 
-// Fonction pour réinitialiser le délai de réponse automatique
-function resetConversationTimeout(message) {
-    if (conversationTimeout) {
-        clearTimeout(conversationTimeout);
+// Timer de réponse automatique après un certain délai (Y secondes)
+function startResponseTimeout(message, channelId) {
+    if (inactiveTimeouts[channelId]) {
+        clearTimeout(inactiveTimeouts[channelId]);
     }
 
-    conversationTimeout = setTimeout(async () => {
-        // Vérifie si une conversation est active et si le dernier message n'est pas du bot
-        if (groupConversation && groupConversation.length > 0) {
-            const lastMessage = groupConversation[groupConversation.length - 1];
-            if (lastMessage.role === 'assistant') {
-                // Le dernier message est du bot, donc on ne répond pas automatiquement
-                return;
-            }
-
-            // Si le dernier message n'est pas du bot, le bot peut proposer de l'aide après 60 secondes
-            await answer(message);
+    inactiveTimeouts[channelId] = setTimeout(async () => {
+        const lastMessage = groupConversations[channelId][groupConversations[channelId].length - 1];
+        // Vérifie que le dernier message n'est pas du bot
+        if (lastMessage.role !== 'assistant') {
+            await answer(message, channelId); // Le bot répond après Y secondes d'inactivité
         }
-    }, 10000); // Répond après 60 secondes d'inactivité
+    }, RESPONSE_TIMEOUT); // 30 secondes d'inactivité
+}
+
+// Timer de réinitialisation après un certain délai (X minutes)
+function startResetTimeout(channelId) {
+    if (resetTimeouts[channelId]) {
+        clearTimeout(resetTimeouts[channelId]);
+    }
+
+    resetTimeouts[channelId] = setTimeout(() => {
+        const lastMessage = groupConversations[channelId][groupConversations[channelId].length - 1];
+        // Ne réinitialise que si le dernier message n'est pas du bot ET que le délai d'inactivité est dépassé
+        if (lastMessage.role !== 'assistant') {
+            resetConversation(channelId); // Réinitialise la conversation après X minutes d'inactivité
+        }
+    }, RESET_TIMEOUT); // 5 minutes d'inactivité
+}
+
+function resetConversation(channelId) {
+    groupConversations[channelId] = [];
+    tokensUsed[channelId] = 0;
+    clearTimeout(inactiveTimeouts[channelId]);
+    clearTimeout(resetTimeouts[channelId]);
 }
 
 client.once('ready', () => {
@@ -171,42 +193,66 @@ client.once('ready', () => {
 });
 
 client.on('messageCreate', async (message) => {
-    // Empêche le bot de répondre à ses propres messages
     if (message.author.bot) return;
 
-    // Vérifie si le bot est mentionné avec @ pour commencer ou continuer la conversation
-    if (message.mentions.has(client.user)) {
-        if (!groupConversation) {
-            groupConversation = [];
-            tokensUsed = 0; // Réinitialise les tokens utilisés
+    const channelId = message.channel.id; // Utilise l'ID du channel pour gérer plusieurs conversations
 
-            // Récupérer l'historique des messages précédents pour le contexte
-            const history = await message.channel.messages.fetch({ limit: 10 });
-            history.reverse().forEach(msg => {
-                groupConversation.push({
-                    role: 'user',
-                    content: `${msg.author.username}: ${msg.content}`
-                });
-            });
-
-            await answer(message);
-            resetConversationTimeout(message); // Déclenche le délai après la réponse
-            return;
-        } else {
-            await answer(message);
-            resetConversationTimeout(message); // Réinitialise le délai après chaque message
-            return;
-        }
+    // Initialise une nouvelle conversation pour ce channel si elle n'existe pas
+    if (!groupConversations[channelId]) {
+        groupConversations[channelId] = [];
+        tokensUsed[channelId] = 0;
     }
 
-    // Si une conversation de groupe est en cours, mais le bot n'est pas mentionné
-    if (groupConversation) {
-        groupConversation.push({
+    // Vérifie si le bot est mentionné ou si la conversation est active
+    if (message.mentions.has(client.user)) {
+        groupConversations[channelId].push({
             role: 'user',
             content: `${message.author.username}: ${message.content}`
         });
 
-        resetConversationTimeout(message); // Réinitialise le délai après chaque message
+        await answer(message, channelId);
+        startResponseTimeout(message, channelId); // Démarre le délai pour la réponse automatique
+        startResetTimeout(channelId); // Démarre le délai pour la réinitialisation automatique
+        return;
+    }
+
+    // Si la conversation continue sans mention du bot, on réinitialise le timer d'inactivité
+    if (groupConversations[channelId].length > 0) {
+        groupConversations[channelId].push({
+            role: 'user',
+            content: `${message.author.username}: ${message.content}`
+        });
+
+        startResponseTimeout(message, channelId); // Redémarre le délai pour la réponse automatique
+        startResetTimeout(channelId); // Redémarre le délai pour la réinitialisation
+
+        // Si le nombre de messages sans sollicitation dépasse la limite, réinitialise
+        const assistantMessages = groupConversations[channelId].filter(msg => msg.role === 'assistant').length;
+        if (groupConversations[channelId].length - assistantMessages >= MAX_MESSAGES_NO_RESPONSE) {
+            resetConversation(channelId); // Réinitialise après trop de messages sans sollicitation
+        }
+    }
+});
+
+client.on(Events.InteractionCreate, async interaction => {
+    if (!interaction.isChatInputCommand()) return;
+
+    const command = interaction.client.commands.get(interaction.commandName);
+
+    if (!command) {
+        console.error(`No command matching ${interaction.commandName} was found.`);
+        return;
+    }
+
+    try {
+        await command.execute(interaction);
+    } catch (error) {
+        console.error(error);
+        if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+        } else {
+            await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
+        }
     }
 });
 
