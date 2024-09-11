@@ -30,7 +30,7 @@ function calculateSpeedBonus(baseSpeed, leadSpeed = 0) {
     for (let tick in tickThresholds) {
         const threshold = tickThresholds[tick];
         // Bonus nécessaire, jamais négatif
-        bonuses[tick] = calculateAdditionalSpeed(baseSpeed, threshold, leadSpeed, 15);
+        bonuses[tick] = Math.floor(calculateAdditionalSpeed(baseSpeed, threshold, leadSpeed, 15));
     }
 
     return bonuses;
