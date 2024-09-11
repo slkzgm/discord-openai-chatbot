@@ -118,6 +118,16 @@ let RESET_TIMEOUT = 300000; // 5 minutes d'inactivité avant de réinitialiser l
 async function answer(message, channelId) {
     await message.channel.sendTyping();
 
+    // Vérifie si quelqu'un remercie ou clôture la conversation
+    if (message.content.toLowerCase().includes("merci")
+        || message.content.toLowerCase().includes("c'est tout")
+        || message.content.toLowerCase().includes("cimer")
+    ) {
+        await message.reply(getRandomResponse('thanks'));
+        resetConversation(channelId); // Réinitialise la conversation sur un merci ou c'est tout
+        return;
+    }
+
     // Ajoute le message de l'utilisateur dans la conversation
     groupConversations[channelId].push({
         role: 'user',
@@ -201,7 +211,7 @@ client.on('messageCreate', async (message) => {
         tokensUsed[channelId] = 0;
 
         // Récupérer l'historique des messages précédents pour le contexte
-        const history = await message.channel.messages.fetch({ limit: 30 });
+        const history = await message.channel.messages.fetch({ limit: 10 });
         history.reverse().forEach(msg => {
             groupConversations[channelId].push({
                 role: 'user',
