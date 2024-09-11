@@ -4,6 +4,12 @@ const { Client, Collection, Events, GatewayIntentBits } = require('discord.js');
 const { answerConversation } = require("./openai");
 require('dotenv').config();
 
+// TODO:
+// - Retirer le fait qu'elle soit trop bavarde (eviter de relancer la conv pour rien)
+// - Apprendre le lore du personnage
+// - Utiliser la fonction pour les ticks
+// - Fine-Tune SW et siege
+
 // Création du client Discord
 const client = new Client({
     intents: [
@@ -108,11 +114,10 @@ function getRandomResponse(category) {
 
 let groupConversations = {}; // Pour gérer plusieurs conversations par channel
 let tokensUsed = {};
-let inactiveTimeouts = {};
 let resetTimeouts = {};
-let MAX_TOKENS = 10000;
+const HISTORY_LIMIT = 15;
+const MAX_TOKENS = 10000;
 let MAX_MESSAGES_NO_RESPONSE = 50; // Nombre de messages sans que le bot ne soit mentionné
-let RESPONSE_TIMEOUT = 30000; // 30 secondes d'inactivité avant que le bot réponde automatiquement
 let RESET_TIMEOUT = 300000; // 5 minutes d'inactivité avant de réinitialiser la conversation
 
 async function answer(message, channelId) {
@@ -128,12 +133,6 @@ async function answer(message, channelId) {
         return;
     }
 
-    // Ajoute le message de l'utilisateur dans la conversation
-    groupConversations[channelId].push({
-        role: 'user',
-        content: `${message.author.username}: ${message.content}`
-    });
-
     try {
         await message.channel.sendTyping();
         const response = await answerConversation(groupConversations[channelId]);
@@ -146,32 +145,16 @@ async function answer(message, channelId) {
 
         tokensUsed[channelId] += response.usage.total_tokens;
 
+        await message.channel.send(botResponse);
         if (tokensUsed[channelId] >= MAX_TOKENS) {
             await message.channel.send(getRandomResponse('tooMuchTalking'));
             resetConversation(channelId); // Réinitialise la conversation
-        } else {
-            await message.channel.send(botResponse);
         }
     } catch (error) {
         console.error("Erreur lors de l'appel à l'API OpenAI :", error);
         await message.reply("Désolé, une erreur s'est produite.");
         resetConversation(channelId); // Réinitialise la conversation en cas d'erreur
     }
-}
-
-// Timer de réponse automatique après un certain délai (Y secondes)
-function startResponseTimeout(message, channelId) {
-    if (inactiveTimeouts[channelId]) {
-        clearTimeout(inactiveTimeouts[channelId]);
-    }
-
-    inactiveTimeouts[channelId] = setTimeout(async () => {
-        const lastMessage = groupConversations[channelId][groupConversations[channelId].length - 1];
-        // Vérifie que le dernier message n'est pas du bot
-        if (lastMessage.role !== 'assistant') {
-            await answer(message, channelId); // Le bot répond après Y secondes d'inactivité
-        }
-    }, RESPONSE_TIMEOUT); // 30 secondes d'inactivité
 }
 
 // Timer de réinitialisation après un certain délai (X minutes)
@@ -192,7 +175,6 @@ function startResetTimeout(channelId) {
 function resetConversation(channelId) {
     groupConversations[channelId] = [];
     tokensUsed[channelId] = 0;
-    clearTimeout(inactiveTimeouts[channelId]);
     clearTimeout(resetTimeouts[channelId]);
 }
 
@@ -202,45 +184,45 @@ client.once('ready', () => {
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
-
     const channelId = message.channel.id; // Utilise l'ID du channel pour gérer plusieurs conversations
 
-    // Initialise une nouvelle conversation pour ce channel si elle n'existe pas
-    if (!groupConversations[channelId]) {
-        groupConversations[channelId] = [];
-        tokensUsed[channelId] = 0;
+    // Vérifie si le bot est mentionné
+    if (message.mentions.has(client.user)) {
+        // Si la conversation n'existe pas encore
+        if (!groupConversations[channelId] || !groupConversations[channelId].length) {
+            // Initialiser la conversation et le nombre de tokens utilisés
+            groupConversations[channelId] = [];
+            tokensUsed[channelId] = 0;
 
-        // Récupérer l'historique des messages précédents pour le contexte
-        const history = await message.channel.messages.fetch({ limit: 10 });
-        history.reverse().forEach(msg => {
+            // Récupérer l'historique des messages précédents pour le contexte
+            const history = await message.channel.messages.fetch({ limit: HISTORY_LIMIT });
+            history.reverse().forEach(msg => {
+                groupConversations[channelId].push({
+                    role: 'user',
+                    content: `${msg.author.globalName}: ${msg.content}`
+                });
+            });
+        } else { // Si la conversation est deja active
             groupConversations[channelId].push({
                 role: 'user',
-                content: `${msg.author.username}: ${msg.content}`
+                content: `${message.author.globalName}: ${message.content}`
             });
-        });
-    }
-
-    // Vérifie si le bot est mentionné ou si la conversation est active
-    if (message.mentions.has(client.user)) {
-        groupConversations[channelId].push({
-            role: 'user',
-            content: `${message.author.username}: ${message.content}`
-        });
+        }
 
         await answer(message, channelId);
-        startResponseTimeout(message, channelId); // Démarre le délai pour la réponse automatique
+        // startResponseTimeout(message, channelId); // Démarre le délai pour la réponse automatique
         startResetTimeout(channelId); // Démarre le délai pour la réinitialisation automatique
         return;
     }
 
-    // Si la conversation continue sans mention du bot, on réinitialise le timer d'inactivité
-    if (groupConversations[channelId].length > 0) {
+    // Si la conversation existe et continue sans mention du bot, on réinitialise le timer d'inactivité
+    if (groupConversations[channelId] && groupConversations[channelId].length > 0) {
         groupConversations[channelId].push({
             role: 'user',
-            content: `${message.author.username}: ${message.content}`
+            content: `${message.author.globalName}: ${message.content}`
         });
 
-        startResponseTimeout(message, channelId); // Redémarre le délai pour la réponse automatique
+        // startResponseTimeout(message, channelId); // Redémarre le délai pour la réponse automatique
         startResetTimeout(channelId); // Redémarre le délai pour la réinitialisation
 
         // Si le nombre de messages sans sollicitation dépasse la limite, réinitialise
