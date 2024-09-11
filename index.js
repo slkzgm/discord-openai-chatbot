@@ -111,7 +111,7 @@ let tokensUsed = {};
 let inactiveTimeouts = {};
 let resetTimeouts = {};
 let MAX_TOKENS = 10000;
-let MAX_MESSAGES_NO_RESPONSE = 10; // Nombre de messages sans que le bot ne soit mentionné
+let MAX_MESSAGES_NO_RESPONSE = 50; // Nombre de messages sans que le bot ne soit mentionné
 let RESPONSE_TIMEOUT = 30000; // 30 secondes d'inactivité avant que le bot réponde automatiquement
 let RESET_TIMEOUT = 300000; // 5 minutes d'inactivité avant de réinitialiser la conversation
 
@@ -124,30 +124,28 @@ async function answer(message, channelId) {
         content: `${message.author.username}: ${message.content}`
     });
 
-    if (groupConversations[channelId].length >= 3) {
-        try {
-            await message.channel.sendTyping();
-            const response = await answerConversation(groupConversations[channelId]);
-            const botResponse = response.choices[0].message.content.trim();
+    try {
+        await message.channel.sendTyping();
+        const response = await answerConversation(groupConversations[channelId]);
+        const botResponse = response.choices[0].message.content.trim();
 
-            groupConversations[channelId].push({
-                role: 'assistant',
-                content: botResponse
-            });
+        groupConversations[channelId].push({
+            role: 'assistant',
+            content: botResponse
+        });
 
-            tokensUsed[channelId] += response.usage.total_tokens;
+        tokensUsed[channelId] += response.usage.total_tokens;
 
-            if (tokensUsed[channelId] >= MAX_TOKENS) {
-                await message.channel.send(getRandomResponse('tooMuchTalking'));
-                resetConversation(channelId); // Réinitialise la conversation
-            } else {
-                await message.channel.send(botResponse);
-            }
-        } catch (error) {
-            console.error("Erreur lors de l'appel à l'API OpenAI :", error);
-            await message.reply("Désolé, une erreur s'est produite.");
-            resetConversation(channelId); // Réinitialise la conversation en cas d'erreur
+        if (tokensUsed[channelId] >= MAX_TOKENS) {
+            await message.channel.send(getRandomResponse('tooMuchTalking'));
+            resetConversation(channelId); // Réinitialise la conversation
+        } else {
+            await message.channel.send(botResponse);
         }
+    } catch (error) {
+        console.error("Erreur lors de l'appel à l'API OpenAI :", error);
+        await message.reply("Désolé, une erreur s'est produite.");
+        resetConversation(channelId); // Réinitialise la conversation en cas d'erreur
     }
 }
 
@@ -201,6 +199,15 @@ client.on('messageCreate', async (message) => {
     if (!groupConversations[channelId]) {
         groupConversations[channelId] = [];
         tokensUsed[channelId] = 0;
+
+        // Récupérer l'historique des messages précédents pour le contexte
+        const history = await message.channel.messages.fetch({ limit: 30 });
+        history.reverse().forEach(msg => {
+            groupConversations[channelId].push({
+                role: 'user',
+                content: `${msg.author.username}: ${msg.content}`
+            });
+        });
     }
 
     // Vérifie si le bot est mentionné ou si la conversation est active

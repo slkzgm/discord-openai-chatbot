@@ -54,7 +54,7 @@ module.exports = {
 
         const bonuses = calculateSpeedBonus(baseSPD, leadSPD);
         await interaction.reply(`
-Pour une base SPD de **${baseSPD}**${ leadSPD ? `avec un lead de **${leadSPD}%**` : ' sans lead' }:\n**Tick 4 :** +${Math.ceil(bonuses[4])} speed\n**Tick 5 :** +${Math.ceil(bonuses[5])} speed\n**Tick 6 :** +${Math.ceil(bonuses[6])} speed\n**Tick 7 :** +${Math.ceil(bonuses[7])} speed\n**Tick 8 :** +${Math.ceil(bonuses[8])} speed\n
+Pour une base SPD de **${baseSPD}**${ leadSPD ? ` avec un lead de **${leadSPD}%**` : ' sans lead' }:\n**Tick 4 :** +${Math.ceil(bonuses[4])} speed\n**Tick 5 :** +${Math.ceil(bonuses[5])} speed\n**Tick 6 :** +${Math.ceil(bonuses[6])} speed\n**Tick 7 :** +${Math.ceil(bonuses[7])} speed\n**Tick 8 :** +${Math.ceil(bonuses[8])} speed\n
         `);
     }
 };
