@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Client, Collection, Events, GatewayIntentBits } = require('discord.js');
 const { answerConversation } = require("./openai");
+const connectDB = require('./database/connection');
 require('dotenv').config();
 
 // TODO:
@@ -178,7 +179,8 @@ function resetConversation(channelId) {
     clearTimeout(resetTimeouts[channelId]);
 }
 
-client.once('ready', () => {
+client.once('ready', async () => {
+    await connectDB();
     console.log(`Connecté en tant que ${client.user.tag}`);
 });
 

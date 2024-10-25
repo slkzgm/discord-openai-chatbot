@@ -13,6 +13,7 @@
     "@anthropic-ai/sdk": "^0.27.3",
     "discord.js": "^14.16.1",
     "dotenv": "^16.4.5",
+    "mongoose": "^8.7.2",
     "openai": "^4.58.2"
   }
 }
