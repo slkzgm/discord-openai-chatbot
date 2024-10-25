@@ -56,7 +56,7 @@ module.exports = {
         // Ajout des membres
         if (siegeMember.length > 0) {
             // const membersList = siegeMember.map(member => `${member.wizardName}: ${member.offs} offs (${member.unitLeft} units left)`).join('\n');
-            const membersList = siegeMember.map(member => `${member.wizardName}: ${member.offs} offs left)`).join('\n');
+            const membersList = siegeMember.map(member => `${member.wizardName}: ${member.offs} offs left`).join('\n');
             embed.addFields({ name: '**Members**', value: `\`\`\`${membersList}\`\`\`` }); // Bloc de code pour les membres
         } else {
             embed.addFields({ name: '**Members**', value: "No units left." });
